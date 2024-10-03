@@ -1,0 +1,451 @@
+---
+title: "ADNI Analysis 2: Logistic Regression"
+---
+
+#Load Packages
+
+```{r}
+library(lmerTest)
+library(corrplot)
+library(ggplot2)
+```
+
+#Read in Dataset
+```{r}
+#Reading in Data
+# MCI_orig<- data.frame(read.table("/Users/shreyarajagopal/Documents/Research/ADNI_4/Subject_Selection/MCI_Only_MCI_AD_Visits_5_March22.csv",header = T, sep = ","))
+
+MCI <-data.frame(read.table("/Users/shreyarajagopal/Documents/Research/ADNI_4/Subject_Selection/MCI_Jun22.csv",header = T, sep = ","))
+
+
+MCI = MCI[MCI$RID!=2336,] #Removing subjects due to issues with ICV measurements
+#MCI = MCI[MCI$RID!=6632,] #Removing subject due to issues with MMSE and CDRSB
+```
+
+#Comparing Dataframes with and without occipital
+
+library(dplyr)
+
+MCI_orig <- distinct(MCI_orig)
+
+MCI_occip <- MCI[,c(1:89)]
+MCI_occip <- distinct(MCI_occip)
+
+MCI_intersect <- inner_join(MCI_orig, MCI_occip)
+
+
+
+#Retain only pre-conversion MCI visits
+
+```{r}
+MCI <- MCI[MCI$Diagnosis == "MCI",]
+```
+
+#Making Cohort and Gender into factors (treated as categorical variables) + Relevelling:
+```{r}
+#Relevelling
+
+#Cohort
+MCI$Cohort = factor(MCI$Cohort)
+cat("\nCurrent Levels:",levels(MCI$Cohort))
+MCI$Cohort<- relevel(MCI$Cohort, "MCI_NC") #MCI_NC = 0, MCI_C = 1
+cat("\nNew Levels:",levels(MCI$Cohort))
+
+#Gender
+MCI$Gender <- factor(MCI$Gender)
+cat("\nGender Levels:",levels(MCI$Gender)) #Female = 0, Male = 1
+
+MCI$Age_sc = scale(MCI$Age)
+M_Age = mean(MCI$Age,na.rm = TRUE)
+SD_Age = sd(MCI$Age, na.rm = TRUE)
+```
+
+
+#Occipital with only Age as a predictor
+
+```{r}
+Occip_mod <- lmer(Occipital ~ Age_sc + (1 + Age_sc|RID), data = MCI, control = lmerControl(optimizer ="Nelder_Mead"), REML = TRUE, na.action = na.exclude)
+summary(Occip_mod)
+```
+#Dividing coefficients up by Cohort
+```{r}
+#Coefficients
+Occip_rand_eff <- ranef(Occip_mod)[["RID"]]
+Occip_rand_eff <- cbind(RID=rownames(Occip_rand_eff),Occip_rand_eff)
+#rownames(Occip_rand_eff)
+
+MCI_NC_ids = unique(MCI$RID[MCI$Cohort == "MCI_NC"])
+MCI_C_ids = unique(MCI$RID[MCI$Cohort == "MCI_C"])
+
+Occip_rand_eff$Cohort = "MCI_NC"
+
+for (i in 1:nrow(Occip_rand_eff)){
+  for (j in 1:length(MCI_C_ids)){
+    if (Occip_rand_eff[i,]$RID == MCI_C_ids[j])
+    {Occip_rand_eff[i,]$Cohort = "MCI_C"}
+  }}
+```
+
+#Make Cohort a factor
+
+```{r}
+#Re-leveling non-converters to be level 0 and converters to be level 1
+is.factor(Occip_rand_eff$Cohort)
+Occip_rand_eff$Cohort <- factor(Occip_rand_eff$Cohort)
+levels(Occip_rand_eff$Cohort)
+Occip_rand_eff$Cohort<- relevel(Occip_rand_eff$Cohort, "MCI_NC") #Made No Treatment baseline
+levels(Occip_rand_eff$Cohort)  #MCI-NC is level 0 and MCI-C is level 1
+
+```
+
+```{r}
+#Computing final slopes for each individual (adding back fixed effects)
+
+#Adding back fixed effects to random effects to get final slope for each individual
+Occip_rand_eff$Age_sc = Occip_rand_eff$Age_sc + Occip_mod@beta[2]  
+Occip_rand_eff$`(Intercept)`= Occip_rand_eff$`(Intercept)`+ Occip_mod@beta[1]
+
+#Plotting Occipital rates of change
+#fitted values
+MCI$Occipital_fit = fitted(Occip_mod) #use na.exclude in the model, otherwise size of orignial data and fitted data will be different
+
+#Dividing up coefficients by cohort
+MCI_NC_Occipital_Coeff <- Occip_rand_eff[Occip_rand_eff$Cohort == "MCI_NC",]
+MCI_C_Occipital_Coeff <- Occip_rand_eff[Occip_rand_eff$Cohort == "MCI_C",]
+
+#Computing the mean B1 (Age_sc) coefficient for MCI_C and MCI_NC separately (EQUAL TO FIXED EFFECT)
+Occipital_MCI_C_slope = mean(MCI_C_Occipital_Coeff$Age_sc, na.rm = TRUE)
+Occipital_MCI_NC_slope = mean(MCI_NC_Occipital_Coeff$Age_sc, na.rm = TRUE)
+
+#Computing the mean B0 (intercept) for MCI_C and MCI_NC separately (EQUAL TO FIXED EFFECT)
+Occipital_MCI_C_intercept = mean(MCI_C_Occipital_Coeff$`(Intercept)`, na.rm = TRUE)
+Occipital_MCI_NC_intercept = mean(MCI_NC_Occipital_Coeff$`(Intercept)`, na.rm = TRUE)
+
+```
+
+#Occipital Plot - WEAKER Age_sc cohort interaction than entorhinal? Still significant
+```{r}
+ggplot(MCI, aes(x=Age_sc, y=Occipital_fit, group = RID, color = Cohort))+geom_line(size=1.5) + 
+  geom_point(colour = ifelse(MCI$Cohort == "MCI_C", 'darkslategrey','red'),size = 1) +  
+  geom_point(aes(x=Age_sc, y=Occipital, group = RID, color= Cohort), size = 1.5, stroke = 0, colour = ifelse(MCI$Cohort == "MCI_C", 'darkblue','firebrick4'),size = 2) + 
+  geom_abline(slope = Occipital_MCI_C_slope, intercept = Occipital_MCI_C_intercept, colour = 'darkblue',size = 1.5) +
+  geom_abline(slope = Occipital_MCI_NC_slope, intercept = Occipital_MCI_NC_intercept, colour = 'firebrick4',size = 1.5) +
+  xlab("Age of Subject") + ylab("Standardized Occipital Volume (SD units)") + ggtitle("Changes in Occipital Volume with Age")+
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+
+
+#
+#ICV with only Age as a predictor
+
+```{r}
+ICV_mod <- lmer(ICV ~ Age_sc + (1 + Age_sc|RID), data = MCI, control = lmerControl(optimizer ="Nelder_Mead"), REML = TRUE, na.action = na.exclude)
+summary(ICV_mod)
+```
+
+#Dividing coefficients up by Cohort
+```{r}
+#Coefficients
+ICV_rand_eff <- ranef(ICV_mod)[["RID"]]
+ICV_rand_eff <- cbind(RID=rownames(ICV_rand_eff),ICV_rand_eff)
+#rownames(ICV_rand_eff)
+
+MCI_NC_ids = unique(MCI$RID[MCI$Cohort == "MCI_NC"])
+MCI_C_ids = unique(MCI$RID[MCI$Cohort == "MCI_C"])
+
+ICV_rand_eff$Cohort = "MCI_NC"
+
+for (i in 1:nrow(ICV_rand_eff)){
+  for (j in 1:length(MCI_C_ids)){
+    if (ICV_rand_eff[i,]$RID == MCI_C_ids[j])
+    {ICV_rand_eff[i,]$Cohort = "MCI_C"}
+  }}
+```
+
+#Make Cohort a factor
+
+```{r}
+#Re-leveling non-converters to be level 0 and converters to be level 1
+is.factor(ICV_rand_eff$Cohort)
+ICV_rand_eff$Cohort <- factor(ICV_rand_eff$Cohort)
+levels(ICV_rand_eff$Cohort)
+ICV_rand_eff$Cohort<- relevel(ICV_rand_eff$Cohort, "MCI_NC") #Made No Treatment baseline
+levels(ICV_rand_eff$Cohort)  #MCI-NC is level 0 and MCI-C is level 1
+```
+```{r}
+#Computing final slopes for each individual (adding back fixed effects)
+
+#Adding back fixed effects to random effects to get final slope for each individual
+ICV_rand_eff$Age_sc = ICV_rand_eff$Age_sc + ICV_mod@beta[2]  
+ICV_rand_eff$`(Intercept)`= ICV_rand_eff$`(Intercept)`+ ICV_mod@beta[1]
+
+#Plotting ICV rates of change
+#fitted values
+MCI$ICV_fit = fitted(ICV_mod) #use na.exclude in the model, otherwise size of orignial data and fitted data will be different
+
+#Dividing up coefficients by cohort
+MCI_NC_ICV_Coeff <- ICV_rand_eff[ICV_rand_eff$Cohort == "MCI_NC",]
+MCI_C_ICV_Coeff <- ICV_rand_eff[ICV_rand_eff$Cohort == "MCI_C",]
+
+#Computing the mean B1 (Age_sc) coefficient for MCI_C and MCI_NC separately (EQUAL TO FIXED EFFECT)
+ICV_MCI_C_slope = mean(MCI_C_ICV_Coeff$Age_sc, na.rm = TRUE)
+ICV_MCI_NC_slope = mean(MCI_NC_ICV_Coeff$Age_sc, na.rm = TRUE)
+
+#Computing the mean B0 (intercept) for MCI_C and MCI_NC separately (EQUAL TO FIXED EFFECT)
+ICV_MCI_C_intercept = mean(MCI_C_ICV_Coeff$`(Intercept)`, na.rm = TRUE)
+ICV_MCI_NC_intercept = mean(MCI_NC_ICV_Coeff$`(Intercept)`, na.rm = TRUE)
+
+```
+
+#ICV Plot - WEAKER Age_sc cohort interaction than entorhinal? Still significant
+```{r}
+ggplot(MCI, aes(x=Age_sc, y=ICV_fit, group = RID, color = Cohort))+geom_line(size=1.5) + 
+  geom_point(colour = ifelse(MCI$Cohort == "MCI_C", 'darkslategrey','red'),size = 1) +  
+  geom_point(aes(x=Age_sc, y=ICV, group = RID, color= Cohort), size = 1.5, stroke = 0, colour = ifelse(MCI$Cohort == "MCI_C", 'darkblue','firebrick4'),size = 2) + 
+  geom_abline(slope = ICV_MCI_C_slope, intercept = ICV_MCI_C_intercept, colour = 'darkblue',size = 1.5) +
+  geom_abline(slope = ICV_MCI_NC_slope, intercept = ICV_MCI_NC_intercept, colour = 'firebrick4',size = 1.5) +
+  xlab("Age of Subject") + ylab("Standardized ICV Volume (SD units)") + ggtitle("Changes in ICV Volume with Age")+
+  theme(plot.title = element_text(hjust = 0.5)) + theme_classic() + theme(axis.text=element_text(size=12),
+                                                                          axis.title=element_text(size=14,face="bold"))
+
+
+```
+
+#Hippocampus with only Age as a predictor
+
+```{r}
+Hip_mod <- lmer(Hippocampus ~ Age_sc + (1 + Age_sc|RID), data = MCI, control = lmerControl(optimizer ="Nelder_Mead"), REML = TRUE, na.action = na.exclude)
+summary(Hip_mod)
+```
+#Dividing coefficients up by Cohort
+```{r}
+#Coefficients
+Hip_rand_eff <- ranef(Hip_mod)[["RID"]]
+Hip_rand_eff <- cbind(RID=rownames(Hip_rand_eff),Hip_rand_eff)
+#rownames(Hip_rand_eff)
+
+MCI_NC_ids = unique(MCI$RID[MCI$Cohort == "MCI_NC"])
+MCI_C_ids = unique(MCI$RID[MCI$Cohort == "MCI_C"])
+
+Hip_rand_eff$Cohort = "MCI_NC"
+
+for (i in 1:nrow(Hip_rand_eff)){
+  for (j in 1:length(MCI_C_ids)){
+    if (Hip_rand_eff[i,]$RID == MCI_C_ids[j])
+    {Hip_rand_eff[i,]$Cohort = "MCI_C"}
+  }}
+```
+
+#Make Cohort a factor
+
+```{r}
+#Re-leveling non-converters to be level 0 and converters to be level 1
+is.factor(Hip_rand_eff$Cohort)
+Hip_rand_eff$Cohort <- factor(Hip_rand_eff$Cohort)
+levels(Hip_rand_eff$Cohort)
+Hip_rand_eff$Cohort<- relevel(Hip_rand_eff$Cohort, "MCI_NC") #Made No Treatment baseline
+levels(Hip_rand_eff$Cohort)  #MCI-NC is level 0 and MCI-C is level 1
+
+```
+
+```{r}
+#Computing final slopes for each individual (adding back fixed effects)
+
+#Adding back fixed effects to random effects to get final slope for each individual
+Hip_rand_eff$Age_sc = Hip_rand_eff$Age_sc + Hip_mod@beta[2]  
+Hip_rand_eff$`(Intercept)`= Hip_rand_eff$`(Intercept)`+ Hip_mod@beta[1]
+
+#Plotting Hippocampus rates of change
+#fitted values
+MCI$Hippocampus_fit = fitted(Hip_mod) #use na.exclude in the model, otherwise size of orignial data and fitted data will be different
+
+#Dividing up coefficients by cohort
+MCI_NC_Hippocampus_Coeff <- Hip_rand_eff[Hip_rand_eff$Cohort == "MCI_NC",]
+MCI_C_Hippocampus_Coeff <- Hip_rand_eff[Hip_rand_eff$Cohort == "MCI_C",]
+
+#Computing the mean B1 (Age_sc) coefficient for MCI_C and MCI_NC separately (EQUAL TO FIXED EFFECT)
+Hippocampus_MCI_C_slope = mean(MCI_C_Hippocampus_Coeff$Age_sc, na.rm = TRUE)
+Hippocampus_MCI_NC_slope = mean(MCI_NC_Hippocampus_Coeff$Age_sc, na.rm = TRUE)
+
+#Computing the mean B0 (intercept) for MCI_C and MCI_NC separately (EQUAL TO FIXED EFFECT)
+Hippocampus_MCI_C_intercept = mean(MCI_C_Hippocampus_Coeff$`(Intercept)`, na.rm = TRUE)
+Hippocampus_MCI_NC_intercept = mean(MCI_NC_Hippocampus_Coeff$`(Intercept)`, na.rm = TRUE)
+
+```
+
+#Hippocampus Plot - WEAKER Age_sc cohort interaction than entorhinal? Still significant
+```{r}
+ggplot(MCI, aes(x=Age_sc, y=Hippocampus_fit, group = RID, color = Cohort))+geom_line(size=1.5) + 
+  geom_point(colour = ifelse(MCI$Cohort == "MCI_C", 'darkslategrey','red'),size = 1) +  
+  geom_point(aes(x=Age_sc, y=Hippocampus, group = RID, color= Cohort), size = 1.5, stroke = 0, colour = ifelse(MCI$Cohort == "MCI_C", 'darkblue','firebrick4'),size = 2) + 
+  geom_abline(slope = Hippocampus_MCI_C_slope, intercept = Hippocampus_MCI_C_intercept, colour = 'darkblue',size = 1.5) +
+  geom_abline(slope = Hippocampus_MCI_NC_slope, intercept = Hippocampus_MCI_NC_intercept, colour = 'firebrick4',size = 1.5) +
+  xlab("Age of Subject") + ylab("Standardized Hippocampus Volume (SD units)") + ggtitle("Changes in Hippocampus Volume with Age")+
+  theme(plot.title = element_text(hjust = 0.5)) 
+#Checking correlations b/w predictors and outcom
+```
+#Entorhinal Growth Curves with only Age as a predictor
+```{r}
+ent_mod <- lmer(Entorhinal ~ Age_sc + (1 + Age_sc|RID), data = MCI, control = lmerControl(optimizer="Nelder_Mead"), REML = TRUE,na.action = na.exclude)
+
+summary(ent_mod)
+```
+
+#Dividing coefficients up by Cohort
+```{r}
+#Coefficients
+ent_rand_eff <- ranef(ent_mod)[["RID"]]
+ent_rand_eff <- cbind(RID=rownames(ent_rand_eff),ent_rand_eff)
+#rownames(ent_rand_eff)
+
+MCI_NC_ids = unique(MCI$RID[MCI$Cohort == "MCI_NC"])
+MCI_C_ids = unique(MCI$RID[MCI$Cohort == "MCI_C"])
+
+ent_rand_eff$Cohort = "MCI_NC"
+
+for (i in 1:nrow(ent_rand_eff)){
+  for (j in 1:length(MCI_C_ids)){
+    if (ent_rand_eff[i,]$RID == MCI_C_ids[j])
+    {ent_rand_eff[i,]$Cohort = "MCI_C"}
+  }}
+
+```
+
+#Make Cohort a factor
+
+```{r}
+#Re-leveling non-converters to be level 0 and converters to be level 1
+is.factor(ent_rand_eff$Cohort)
+ent_rand_eff$Cohort <- factor(ent_rand_eff$Cohort)
+levels(ent_rand_eff$Cohort)
+ent_rand_eff$Cohort<- relevel(ent_rand_eff$Cohort, "MCI_NC") #Made No Treatment baseline
+levels(ent_rand_eff$Cohort)  #MCI-NC is level 0 and MCI-C is level 1
+```
+
+```{r}
+#Computing final slopes for each individual (adding back fixed effects)
+
+#Adding back fixed effects to random effects to get final slope for each individual
+ent_rand_eff$Age_sc = ent_rand_eff$Age_sc + ent_mod@beta[2]  
+ent_rand_eff$`(Intercept)`= ent_rand_eff$`(Intercept)`+ ent_mod@beta[1]
+
+#Plotting Entorhinal rates of change
+#fitted values
+MCI$Entorhinal_fit = fitted(ent_mod) #use na.exclude in the model, otherwise size of orignial data and fitted data will be different
+
+#Dividing up coefficients by cohort
+MCI_NC_Entorhinal_Coeff <- ent_rand_eff[ent_rand_eff$Cohort == "MCI_NC",]
+MCI_C_Entorhinal_Coeff <- ent_rand_eff[ent_rand_eff$Cohort == "MCI_C",]
+
+#Computing the mean B1 (Age_sc) coefficient for MCI_C and MCI_NC separately (EQUAL TO FIXED EFFECT)
+Entorhinal_MCI_C_slope = mean(MCI_C_Entorhinal_Coeff$Age_sc, na.rm = TRUE)
+Entorhinal_MCI_NC_slope = mean(MCI_NC_Entorhinal_Coeff$Age_sc, na.rm = TRUE)
+
+#Computing the mean B0 (intercept) for MCI_C and MCI_NC separately (EQUAL TO FIXED EFFECT)
+Entorhinal_MCI_C_intercept = mean(MCI_C_Entorhinal_Coeff$`(Intercept)`, na.rm = TRUE)
+Entorhinal_MCI_NC_intercept = mean(MCI_NC_Entorhinal_Coeff$`(Intercept)`, na.rm = TRUE)
+
+```
+
+#Entorhinal Plot - WEAKER Age_sc cohort interaction than entorhinal? Still significant
+```{r}
+ggplot(MCI, aes(x=Age_sc, y=Entorhinal_fit, group = RID, color = Cohort))+geom_line(size=1.5) + 
+  geom_point(colour = ifelse(MCI$Cohort == "MCI_C", 'darkslategrey','red'),size = 1) +  
+  geom_point(aes(x=Age_sc, y=Entorhinal, group = RID, color= Cohort), size = 1.5, stroke = 0, colour = ifelse(MCI$Cohort == "MCI_C", 'darkblue','firebrick4'),size = 2) + 
+  geom_abline(slope = Entorhinal_MCI_C_slope, intercept = Entorhinal_MCI_C_intercept, colour = 'darkblue',size = 1.5) +
+  geom_abline(slope = Entorhinal_MCI_NC_slope, intercept = Entorhinal_MCI_NC_intercept, colour = 'firebrick4',size = 1.5) +
+  xlab("Age of Subject") + ylab("Standardized Entorhinal Volume (SD units)") + ggtitle("Changes in Entorhinal Volume with Age")+
+  theme(plot.title = element_text(hjust = 0.5)) 
+```
+```{r}
+cormat1 = merge(Occip_rand_eff, ICV_rand_eff,by = "RID")
+
+colnames(cormat1)[2] <- "Occip_intercept"
+colnames(cormat1)[3] <- "Occip_slope"
+colnames(cormat1)[5] <-"ICV_intercept"
+colnames(cormat1)[6] <-"ICV_slope"
+colnames(cormat1)[4]<-"Cohort"
+
+cormat2 = merge(Hip_rand_eff, ent_rand_eff,by = "RID")
+
+colnames(cormat2)[2] <- "Hip_intercept"
+colnames(cormat2)[3] <- "Hip_slope"
+colnames(cormat2)[5] <-"ent_intercept"
+colnames(cormat2)[6] <-"ent_slope"
+colnames(cormat2)[4]<-"Cohort"
+
+
+```
+
+
+
+#Z-scoring slopes
+```{r}
+
+
+
+M_Occip_Slope = mean(cormat1$Occip_slope,na.rm = TRUE)
+SD_Occip_Slope = sd(cormat1$Occip_slope,na.rm = TRUE)
+
+M_ICV_Slope = mean(cormat1$ICV_slope,na.rm = TRUE)
+SD_ICV_Slope = sd(cormat1$ICV_slope,na.rm = TRUE)
+
+cormat1$Occip_slope = scale(cormat1$Occip_slope)
+cormat1$ICV_slope = scale(cormat1$ICV_slope)
+
+M_Hip_Slope = mean(cormat2$Hip_slope,na.rm = TRUE)
+SD_Hip_Slope = sd(cormat2$Hip_slope,na.rm = TRUE)
+
+
+M_ent_Slope = mean(cormat2$ent_slope,na.rm = TRUE)
+SD_ent_Slope = sd(cormat2$ent_slope,na.rm = TRUE)
+
+cormat2$Hip_slope = scale(cormat2$Hip_slope)
+cormat2$ent_slope = scale(cormat2$ent_slope)
+
+cormat = merge(cormat1,cormat2,by = "RID")
+```
+
+```{r}
+plot(cormat$Occip_slope,cormat$Hip_slope,xlab = "Occipital Slopes", ylab = "Hippocampal Slopes",main = "Random Slopes Correlation",col = ifelse(cormat$Cohort.x == "MCI_C",'blue','red'))
+#text(-2.3,0.35,paste("r = ",round(c_Hippocampus_F3$statistic,2), "\np <0.001"))
+
+abline(lm(cormat$Occip_slope~cormat$Hip_slope))
+
+plot(cormat$Occip_slope,cormat$ent_slope,xlab = "Occipital Slopes", ylab = "entorhinal Slopes",main = "Random Slopes Correlation",col = ifelse(cormat$Cohort.x == "MCI_C",'blue','red'))
+#text(-2.3,0.35,paste("r = ",round(c_entpocampus_F3$statistic,2), "\np <0.001"))
+
+abline(lm(cormat$Occip_slope~cormat$ent_slope))
+```
+
+#Predicting cohort from Occipital Slopes
+```{r}
+LR_Occip_null <- glm(Cohort ~ 1, data = cormat1, family = binomial)
+LR_Occip <- glm(Cohort ~ Occip_slope, data = cormat1, family = binomial) 
+anova(LR_Occip_null, LR_Occip)
+1 - pchisq(8.4849, 1)
+summary(LR_Occip)
+summary(LR_Occip_null)
+exp(LR_Occip$coefficients)
+```
+
+#Predicting cohort from ICVital Slopes
+```{r}
+LR_ICV_null <- glm(Cohort ~ 1, data = cormat1, family = binomial)
+LR_ICV <- glm(Cohort ~ ICV_slope, data = cormat1, family = binomial) 
+anova(LR_ICV_null, LR_ICV)
+1 - pchisq(8.4849, 1)
+summary(LR_ICV)
+summary(LR_ICV_null)
+exp(LR_ICV$coefficients)
+```
+#LR Plots
+```{r}
+library(effects)
+plot(Effect(focal.predictors ="Occip_slope", mod = LR_Occip), xlab = "Rate of change of Occipital volume", ylab = "Probability of progression to to Dementia", main = "Predicting Progression to Dementia - Occipital Rates")
+plot(Effect(focal.predictors ="ICV_slope", mod = LR_ICV), xlab = "Rate of change of ICV Volume", ylab = "Probability of progression to to Dementia", main = "Predicting Progression to Dementia - ICV Rates")
+
+
+
+```
+
