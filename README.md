@@ -12,7 +12,7 @@ ADNI_2_Revisions: Predicting progression to dementia of the Alzheimer’s type (
 
 ADNI_3_Revisions: Evaluating the link between rates of structural and cognitive decline (Results section 3)
 
-Subject Selection Scripts:
+Subject Selection Scripts: The Selecting_Participants folder contains the scripts used to extract the participants that fit our selection criteria (Methods section) from the ADNI Database
 
 
 
